@@ -1,0 +1,309 @@
+
+#include "Scope.h"
+#include "Menu.h"
+
+#define ESP32 1
+
+#ifdef ESP8266
+#define CS_PIN D3
+#endif
+
+#ifdef ESP32
+
+#define DDS_CLK 17
+#define DDS_LOAD 16
+#define DDS_DATA 4
+#define DDS_RESET 2
+#define FQ_UD DDS_LOAD
+#define SDAT DDS_DATA
+#define SCLK DDS_CLK
+
+#define LED 15
+#endif
+
+
+
+#define Cur1   33
+#define Cur2   25
+#define V1     32
+
+
+
+//////////////////
+//  Touch Test  //
+//////////////////
+TS_Point p;
+void TouchTest() {
+  p = ts.getPoint();
+  if (ts.touched()) {
+    Serial.print("Pressure = ");
+    Serial.print(p.z);
+    Serial.print(", x = ");
+    Serial.print(p.x);
+    Serial.print(", y = ");
+    Serial.print(p.y);
+    Serial.println();
+  }
+}
+
+
+/////////////
+//  Setup  //
+/////////////
+static int taskCore = 0;
+void setup() {
+  Serial.begin(115200);
+  Serial.setTimeout(100);
+  delay(500);
+  Serial.println("Power Monitor Test!"); 
+
+  pinMode(TOUCHCS_PIN,OUTPUT);
+  digitalWrite(TOUCHCS_PIN,HIGH);
+    
+  if(ts.begin()) Serial.println("Touch OK");
+  scope.begin();
+  
+  Serial.println("Runing....");
+  dacWrite(26,0);
+  
+  Serial.print("Starting to create task on core ");
+  Serial.println(taskCore);
+
+  xTaskCreatePinnedToCore(
+                    coreTask,   /* Function to implement the task */
+                    "coreTask", /* Name of the task */
+                    10000,      /* Stack size in words */
+                    NULL,       /* Task input parameter */
+                    0,          /* Priority of the task */
+                    NULL,       /* Task handle. */
+                    taskCore);  /* Core where the task should run */ 
+
+  Serial.println("Task created...");
+  Serial.println("Task Manager Version: " + String(tskKERNEL_VERSION_NUMBER));
+}
+
+
+//////////////////////////////////
+//  Get Data for selected Mode  //
+//////////////////////////////////
+int GetData(int AvgN) {
+  int Traces;
+  double v1, c1, c2;
+
+  long sampleus = round(((((float)1/(float)30) / (float)scope.traceWidth)) * 1e6);
+
+  //////////
+  //  V1  //
+  //////////
+  long tic = micros();
+  for(int sample=0;sample<scope.traceWidth;sample++) {
+    while((micros()-tic) < sampleus);     
+    scope.data[0][sample] = analogRead(V1);
+    tic = micros();
+  }    
+  //  Scale to Trace
+  for(int sample=0;sample<scope.traceWidth;sample++) 
+    scope.data[0][sample] = round(((float)(scope.data[0][sample] / (double)4095) * (double)3.5) * scope.LeftYScale);
+  
+  ////////////
+  //  Cur1  //
+  ////////////
+  tic = micros();
+  for(int sample=0;sample<scope.traceWidth;sample++) {
+    while((micros()-tic) < sampleus);     
+    scope.data[1][sample] = analogRead(Cur1);
+    tic = micros();
+  }    
+  //  Scale to Trace
+  for(int sample=0;sample<scope.traceWidth;sample++) 
+    scope.data[1][sample] = round(((float)(scope.data[1][sample] / (double)4095) * (double)3.5) * scope.LeftYScale);
+
+  ////////////
+  //  Cur2  //
+  ////////////
+  tic = micros();
+  for(int sample=0;sample<scope.traceWidth;sample++) {
+    while((micros()-tic) < sampleus);     
+    scope.data[2][sample] = analogRead(Cur2);
+    tic = micros();
+  }    
+  //  Scale to Trace
+  for(int sample=0;sample<scope.traceWidth;sample++) 
+    scope.data[2][sample] = round(((float)(scope.data[2][sample] / (double)4095) * (double)3.5) * scope.LeftYScale);
+
+  Traces = 3;
+  scope.TraceNames[0] = "V1";
+  scope.TraceNames[1] = "Cur 1";
+  scope.TraceNames[2] = "Cur 2";
+  return Traces;
+}
+
+
+void ScanAndShow() {
+  scope.RightYScale = (float)(scope.height-scope.topmargin-scope.bottommargin) / scope.RightYMax;
+  scope.LeftYScale  = (float)(scope.height-scope.topmargin-scope.bottommargin) / scope.LeftYMax;
+  int Traces = GetData(1);
+  menu.CheckSEL();
+  scope.ShowData(Traces);
+}
+
+int GetAverage(int ADCN, int Samples, int SampleDelay) {
+  long Total = 0;
+  for (int i = 1; i <= Samples; i++) {
+    Total = Total + analogRead(ADCN);
+    delayMicroseconds(SampleDelay);
+  }
+  return round(Total / Samples);
+}
+
+void WaitingForRisingEdge(int ADCN, int SampleDelay) {
+  int S1, S2;
+  S1 = 0;
+  S2 = 0;
+  int Average = GetAverage(ADCN, 200, SampleDelay);
+  while (S2 <= S1) {
+    while (analogRead(ADCN) > Average);
+    while (analogRead(ADCN) < Average);
+    S1 = analogRead(ADCN);
+    delayMicroseconds(3 * SampleDelay);
+    S2 = analogRead(ADCN);
+  }
+}
+
+#define TotalSamples 125
+
+
+void DoMonitor() {
+  int Samples1[TotalSamples];
+  int Samples2[TotalSamples];
+  int Samples3[TotalSamples];
+
+
+  //  Calculate Sample Delay for 2 Cycles, 60Hz, TotalSamples
+  int SampleDelay = round(((((float)1 / (float)60) / TotalSamples) * 1e6) * 2);
+
+  //  Wait for Go Command that contains Threshold Above Average
+  while (Serial.available() == 0);
+  int Threshold = Serial.parseInt();
+
+  //  Obtain Average and Set Threshold To It
+  int Average = GetAverage(V1, 2*TotalSamples, SampleDelay);
+  Threshold = Average;
+
+  //  Find Trigger Point
+  WaitingForRisingEdge(V1, SampleDelay);
+  while (analogRead(V1) < Threshold);
+
+  //  Collect Samples
+  for (int i = 0; i < TotalSamples; i++) {
+    long tt1 = 0;
+    long tt2 = 0;
+    long tt3 = 0;
+    long t = micros();
+    int n = 0;
+    while(micros()<(t+SampleDelay)) {
+      tt1 = tt1 + analogRead(V1);
+      tt2 = tt2 + analogRead(Cur1);
+      tt3 = tt3 + analogRead(Cur2);
+      n++;
+    }
+    Samples1[i] = round(tt1 / n);
+    Samples2[i] = round(tt2 / n);
+    Samples3[i] = round(tt3 / n);
+    //delayMicroseconds(SampleDelay);
+  }
+
+  for (int i = 0; i < TotalSamples; i++) {
+    Serial.print(String(Samples1[i]) + ",");
+  }
+  for (int i = 0; i < TotalSamples; i++) {
+    Serial.print(String(Samples2[i]) + ",");
+  }
+  for (int i = 0; i < TotalSamples; i++) {
+    Serial.print(String(Samples3[i]) + ",");
+  }
+  Serial.println("");
+}
+
+void DoLCD() {
+  int Samples1[TotalSamples];
+  int Samples2[TotalSamples];
+  int Samples3[TotalSamples];
+
+  //  Calculate Sample Delay for 2 Cycles, 60Hz, TotalSamples
+  int SampleDelay = round(((((float)1 / (float)60) / TotalSamples) * 1e6) * 2);
+
+  int Threshold = 1;
+
+  //  Obtain Average and Set Threshold To It
+  int Average = GetAverage(V1, 2*TotalSamples, SampleDelay);
+  Threshold = Average;
+
+  //  Find Trigger Point
+  WaitingForRisingEdge(V1, SampleDelay);
+  while (analogRead(V1) < Threshold);
+
+  scope.TraceNames[0] = "V1";
+  scope.TraceNames[1] = "Cur 1";
+  scope.TraceNames[2] = "Cur 2"; 
+  scope.RightYScale = (float)(scope.height-scope.topmargin-scope.bottommargin) / scope.RightYMax;
+  scope.LeftYScale  = (float)(scope.height-scope.topmargin-scope.bottommargin) / scope.LeftYMax;
+
+  //  Collect Samples
+  for (int i = 0; i < TotalSamples; i++) {
+    long tt1 = 0;
+    long tt2 = 0;
+    long tt3 = 0;
+    long t = micros();
+    int n = 0;
+    while(micros()<(t+SampleDelay)) {
+      tt1 = tt1 + analogRead(V1);
+      tt2 = tt2 + analogRead(Cur1);
+      tt3 = tt3 + analogRead(Cur2);
+      n++;
+    }
+    Samples1[i] = round(tt1 / n);
+    Samples2[i] = round(tt2 / n);
+    Samples3[i] = round(tt3 / n);
+  }
+
+  for(int i=0;i<TotalSamples;i++) { 
+    scope.data[0][(i*2)]   = round(((float)(Samples1[i] / (double)4095) * (double)3.5) * scope.LeftYScale);
+    scope.data[0][(i*2)+1] = round(((float)(Samples1[i] / (double)4095) * (double)3.5) * scope.LeftYScale);
+  }
+  for(int i=0;i<TotalSamples;i++) { 
+    scope.data[1][(i*2)]   = round(((float)(Samples2[i] / (double)4095) * (double)3.5) * scope.LeftYScale*1.1);
+    scope.data[1][(i*2)+1] = round(((float)(Samples2[i] / (double)4095) * (double)3.5) * scope.LeftYScale*1.1);
+  }
+  for(int i=0;i<TotalSamples;i++) { 
+    scope.data[2][(i*2)]   = round(((float)(Samples3[i] / (double)4095) * (double)3.5) * scope.LeftYScale*1.2);
+    scope.data[2][(i*2)+1] = round(((float)(Samples3[i] / (double)4095) * (double)3.5) * scope.LeftYScale*1.2);
+  }
+  scope.ShowData(3);
+}
+
+
+void coreTask(void * pvParameters){   
+  int j = 0;
+  while(true) {
+    int wave = 128 + round((float)127 * sin((float)j/(float)3));
+    dacWrite(26,wave);
+    vTaskDelay(1);
+    j++;
+    if(j>(float)6.28*(float)3) j=0;
+  }
+}
+
+
+////////////
+//  Loop  //
+////////////
+void loop(void) {
+  int currentMenu = menu.menuIndex;
+  menu.ShowMenu(menuLevel1, ELEMENTS(menuLevel1));
+  DoLCD();
+  if(Serial.available() != 0) DoMonitor();
+  menu.SetmenuIndex();
+}
+
+

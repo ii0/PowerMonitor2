@@ -1,0 +1,156 @@
+#include "Scope.h"
+
+
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RESET);
+//(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RESET);
+
+
+MyScope::MyScope() {
+}
+
+///////////////////////
+//  320(w) x 240(h)  //
+//  Constructor      //
+///////////////////////
+void MyScope::begin() {
+  tft.begin();
+  tft.fillScreen(ILI9341_BLACK);    
+  pinMode(TFT_LED,OUTPUT);
+  digitalWrite(TFT_LED,HIGH);
+  tft.setRotation(3);
+  width = tft.width();
+  height = tft.height();
+  leftmargin = 30;
+  rightmargin = 40;
+  topmargin = 70;
+  bottommargin = 25;
+  xdiv = 5;
+  ydiv = 5;
+  Serial.println("Width: " + String(width) + "  Height: " + String(height));
+}
+
+
+////////////////
+//  Text Bar  //
+////////////////
+void MyScope::TextBar(int x0, int y0, String text) {
+  int h = tft.height();
+  tft.fillRoundRect(5,h-20,200,20,5, ILI9341_DARKGREY);
+  tft.setCursor(8,h-17);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextSize(1);
+  tft.print(text);  
+}
+
+/////////////////
+//  Print Text //
+/////////////////
+void MyScope::printText(int x, int y, int Tsize, uint16_t Color, boolean Selected, String text) {
+  if(Selected) tft.fillRoundRect(x,y-2,75,19,5, ILI9341_NAVY);
+  else tft.fillRoundRect(x,y-2,75,19,5, ILI9341_BLACK);
+  tft.setTextColor(Color);
+  tft.setTextSize(Tsize);
+  tft.setCursor(x,y);
+  tft.print(" " + text);   
+}
+
+/////////////////
+//  Print Text //
+/////////////////
+void MyScope::printTextOnly(int x, int y, int Tsize, uint16_t Color, String text) {
+  tft.setTextColor(Color);
+  tft.setTextSize(Tsize);
+  tft.setCursor(x,y);
+  tft.print(text);   
+}
+ 
+/////////////////
+//  Draw Grid  //
+/////////////////
+void MyScope::DrawGrid() {
+  int x, y;
+  uint16_t ILI9341_VERYDARKGREY = tft.color565(64,64,64);     
+  int pixpergrid = (width-leftmargin-rightmargin)/xdiv; 
+  for(x=leftmargin; x<(leftmargin+(xdiv*pixpergrid))+1; x+=pixpergrid)  tft.drawFastVLine(x, topmargin, height-topmargin-bottommargin, ILI9341_DARKGREY);  
+  for(y=topmargin; y<height; y+=(height-topmargin-bottommargin)/ydiv) tft.drawFastHLine(leftmargin, y, width-leftmargin-rightmargin, ILI9341_DARKGREY);  
+  tft.setTextColor(ILI9341_ORANGE);
+  tft.setTextSize(2);
+  tft.setCursor(75,10);
+}
+
+///////////////////
+//  Erase Trace  //
+///////////////////
+boolean First = true;
+void MyScope::EraseTrace(int Trace, int Offset) {
+  int x, y, w = tft.width(), h = tft.height();
+  if (~First) 
+    for(x=1; x<width-leftmargin-rightmargin; x++) tft.drawLine(x+leftmargin-1,Offset-erase[Trace-1][x-1],x+leftmargin,Offset-erase[Trace-1][x],ILI9341_BLACK);  
+    //for(x=1; x<w; x++) tft.drawLine(x+leftmargin-1,Offset-erase[Trace-1][x-1],x+leftmargin,Offset-erase[Trace-1][x],ILI9341_BLACK);  
+  First = false;
+}
+
+//////////////////
+//  Draw Trace  //
+//////////////////
+void MyScope::DrawTrace(int Trace, int Offset, uint16_t Color) {
+  int x, y, w = tft.width(), h = tft.height();
+  for(x=1; x<width-leftmargin-rightmargin; x++) tft.drawLine(x+leftmargin-1,Offset-data[Trace-1][x-1],x+leftmargin,Offset-data[Trace-1][x],Color);  
+  ReadyErase(Trace);
+}
+
+int lastx, lasty;
+void MyScope::CursorTest() {
+  DrawGrid();
+  tft.drawFastVLine(lastx,0,tft.height(),ILI9341_BLACK);
+  tft.drawFastHLine(0,lasty,tft.width(),ILI9341_BLACK);
+  tft.drawFastVLine(Count,0,tft.height(),ILI9341_BLUE);
+  tft.drawFastHLine(0,Count,tft.width(),ILI9341_BLUE);
+  lastx = Count;
+  lasty = Count;
+}
+
+void MyScope::ReadyErase(int Trace) {
+  for(int i=0;i<400;i++) erase[Trace-1][i] = data[Trace-1][i];
+}
+
+
+void MyScope::ShowMenu() {
+  //  Top Menu Line 1
+  printText(1,10,2,ILI9341_BLUE,(MenuSelect==1),"SWR");   
+  printText(75,10,2,ILI9341_RED,(MenuSelect==2),"Vf");    
+  printText(150,10,2,ILI9341_GREEN,(MenuSelect==3),"Vr");
+  printText(225,10,2,ILI9341_GREEN,(MenuSelect==4),"Vr");
+  //  Top Menu Line 2
+  printText(1,30,2,ILI9341_BLUE,(MenuSelect==5),"Zx");     
+  printText(75,30,2,ILI9341_RED,(MenuSelect==6),"R");    
+  printText(150,30,2,ILI9341_GREEN,(MenuSelect==7),"j0");
+  printText(225,30,2,ILI9341_GREEN,(MenuSelect==8),"j0");
+  //  Top Menu Line 3
+  printText(1,50,2,ILI9341_BLUE,(MenuSelect==9),"Zx");     
+  printText(75,50,2,ILI9341_RED,(MenuSelect==10),"R");    
+  printText(150,50,2,ILI9341_GREEN,(MenuSelect==11),"j0");
+  printText(225,50,2,ILI9341_GREEN,(MenuSelect==12),String(MenuSelect)); 
+}
+
+void MyScope::ShowData() {
+  DrawGrid();
+  EraseTrace(1,height-bottommargin);
+  EraseTrace(2,height-bottommargin);
+  EraseTrace(3,height-bottommargin);
+  DrawTrace(1,height-bottommargin,ILI9341_BLUE);   
+  DrawTrace(2,height-bottommargin,ILI9341_RED);   
+  DrawTrace(3,height-bottommargin,ILI9341_GREEN);
+
+
+  //  Bottom Freq Scale
+  printText(10,height-15,1,ILI9341_GREEN,false,"0MHz");
+  printText(leftmargin+((width-leftmargin-rightmargin)/2)-20,height-15,1,ILI9341_GREEN,false,"15MHz");
+  printText(width-rightmargin-20,height-15,1,ILI9341_GREEN,false,"30MHz");
+  tft.drawFastVLine(leftmargin+125,height-30,10,ILI9341_GREEN);
+
+  //  Left SWR Scale
+  printTextOnly(10,height-bottommargin-10,1,ILI9341_BLUE,"0");
+  printTextOnly(width-rightmargin+5,height-bottommargin-10,1,ILI9341_GREEN,"100");
+}
+
