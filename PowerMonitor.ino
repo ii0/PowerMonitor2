@@ -41,7 +41,7 @@ void setup() {
   Serial.begin(115200);
   Serial.setTimeout(100);
   delay(500);
-  Serial.println("Power Monitor Test!"); 
+  Serial.println("Power Monitor Test start!"); 
 
   scope.begin();
   
